@@ -70,8 +70,9 @@ func deleteUser(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
-func RecurseJsonMap(dat map[string]interface{}) bool {
-	isRequestSecure := true
+func checkForXSSPayload(dat map[string]interface{}) bool {
+	isRequestMalacious := false
+
 	for key, value := range dat {
 		log.Printf("key: " + key + " ")
 		// print array properties
@@ -82,7 +83,7 @@ func RecurseJsonMap(dat map[string]interface{}) bool {
 				// recurse subobjects in the array
 				subobj, ok := arrVal.(map[string]interface{})
 				if ok {
-					RecurseJsonMap(subobj)
+					checkForXSSPayload(subobj)
 				} else {
 					// print other values
 					log.Printf("value: %+v\n", arrVal)
@@ -94,21 +95,18 @@ func RecurseJsonMap(dat map[string]interface{}) bool {
 		// recurse subobjects
 		subobj, ok := value.(map[string]interface{})
 		if ok {
-			RecurseJsonMap(subobj)
+			checkForXSSPayload(subobj)
 		} else {
-			// print other values
-			var re = regexp.MustCompile(`<|>|script|document|alert|\|`)
+			var re = regexp.MustCompile(`<("[^"]*"|'[^']*'|[^'">])*>`)
 			Value := fmt.Sprintf("%v", value)
 			Value, err := url.QueryUnescape(Value)
 			if err != nil {
 				log.Fatal(err)
 			}
 
-			log.Printf("payload value", Value)
-
 			if re.MatchString(Value) {
 				log.Printf("XSS attack, malicious script")
-				isRequestSecure = false
+				isRequestMalacious = true
 				break
 			} else {
 				log.Printf("payload is secure")
@@ -116,7 +114,7 @@ func RecurseJsonMap(dat map[string]interface{}) bool {
 			log.Printf("value: %+v\n", value)
 		}
 	}
-	return isRequestSecure
+	return isRequestMalacious
 }
 
 //----------
@@ -139,8 +137,6 @@ func main() {
 	e.Use(middleware.BodyDump(func(c echo.Context, reqBody, resBody []byte) {
 
 		if c.Request().Method == "PUT" || c.Request().Method == "POST" {
-			log.Printf("%s", c.Request().Method)
-			log.Printf("%s", reqBody)
 
 			var err error
 
@@ -151,18 +147,11 @@ func main() {
 				print("error while unmarshing JSON", err)
 			}
 
-			log.Printf("%s", f)
+			log.Printf("%s", checkForXSSPayload(f))
 
-			// RecurseJsonMap(f)
-			log.Printf("%s", RecurseJsonMap(f))
-
-			if RecurseJsonMap(f) == false {
-				echo.NewHTTPError(http.StatusInternalServerError)
+			if checkForXSSPayload(f) == true {
+				// need to add code for rejecting the request by status 400
 			}
-
-			log.Printf("resBody %s", resBody)
-
-			c.JSON(http.StatusInternalServerError, "bad request")
 
 		} else {
 			return
