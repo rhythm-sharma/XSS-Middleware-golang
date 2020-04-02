@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
@@ -25,6 +28,11 @@ var (
 	users = map[int]*user{}
 	seq   = 1
 )
+
+type bodyDumpResponseWriter struct {
+	io.Writer
+	http.ResponseWriter
+}
 
 //----------
 // Handlers
@@ -117,6 +125,36 @@ func checkForXSSPayload(dat map[string]interface{}) bool {
 	return isRequestMalacious
 }
 
+func CheckForXSSAttack() echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			log.Printf("c inside CheckForXSSAttack %s\n", c)
+			if c.Request().Method == "PUT" || c.Request().Method == "POST" {
+
+				var err error
+
+				var f map[string]interface{}
+
+				reqBody := []byte{}
+				if c.Request().Body != nil { // Read
+					reqBody, _ = ioutil.ReadAll(c.Request().Body)
+				}
+				c.Request().Body = ioutil.NopCloser(bytes.NewBuffer(reqBody)) // Reset
+
+				err = json.Unmarshal([]byte(reqBody), &f)
+				if err != nil {
+					log.Printf("error while unmarshing JSON", err)
+				}
+
+				if checkForXSSPayload(f) == true {
+					return echo.NewHTTPError(http.StatusBadRequest, "Bad Request")
+				}
+			}
+			return next(c)
+		}
+	}
+}
+
 //----------
 // Main function
 //----------
@@ -134,30 +172,7 @@ func main() {
 		ContentSecurityPolicy: "default-src 'self'",
 	}))
 
-	e.Use(middleware.BodyDump(func(c echo.Context, reqBody, resBody []byte) {
-
-		if c.Request().Method == "PUT" || c.Request().Method == "POST" {
-
-			var err error
-
-			var f map[string]interface{}
-
-			err = json.Unmarshal([]byte(reqBody), &f)
-			if err != nil {
-				print("error while unmarshing JSON", err)
-			}
-
-			log.Printf("%s", checkForXSSPayload(f))
-
-			if checkForXSSPayload(f) == true {
-				// need to add code for rejecting the request by status 400
-			}
-
-		} else {
-			return
-		}
-
-	}))
+	e.Use(CheckForXSSAttack())
 
 	// Routes
 	e.POST("/users", createUser)
